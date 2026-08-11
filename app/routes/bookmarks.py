@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlmodel import Session, select
 
 from app.auth import require_api_key
 from app.db import get_session
+from app.enrichment import fetch_and_store_title
 from app.models import Bookmark, Tag
 from app.schemas import BookmarkCreate, BookmarkRead, BookmarkUpdate
 
@@ -39,11 +40,14 @@ def _get_bookmark_or_404(session: Session, bookmark_id: int) -> Bookmark:
 
 
 @router.post("", response_model=BookmarkRead, status_code=201)
-def create_bookmark(payload: BookmarkCreate, session: Session = Depends(get_session)):
+def create_bookmark(
+    payload: BookmarkCreate, background_tasks: BackgroundTasks, session: Session = Depends(get_session)
+):
     bookmark = Bookmark(url=payload.url, tags=_get_or_create_tags(session, payload.tags))
     session.add(bookmark)
     session.commit()
     session.refresh(bookmark)
+    background_tasks.add_task(fetch_and_store_title, bookmark.id, bookmark.url)
     return _to_read(bookmark)
 
 
