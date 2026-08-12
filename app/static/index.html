@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>readshelf</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fafafa;
+    --panel: #ffffff;
+    --border: #e2e2e2;
+    --text: #1a1a1a;
+    --muted: #6b6b6b;
+    --accent: #2563eb;
+    --accent-text: #ffffff;
+    --danger: #b91c1c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181a;
+      --panel: #212226;
+      --border: #33343a;
+      --text: #ececec;
+      --muted: #9a9a9a;
+      --accent: #3b82f6;
+      --accent-text: #0b1220;
+      --danger: #f87171;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
+  h1 { font-size: 1.4rem; margin: 0 0 1.5rem; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+  }
+  label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.25rem; }
+  input[type=text], input[type=password] {
+    width: 100%;
+    padding: 0.5rem 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 0.9rem;
+  }
+  .row { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.7rem; }
+  .row > div { flex: 1; min-width: 160px; }
+  button {
+    border: none;
+    border-radius: 6px;
+    padding: 0.5rem 0.9rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  button.primary { background: var(--accent); color: var(--accent-text); }
+  button.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  button.danger { background: transparent; color: var(--danger); border: 1px solid var(--border); }
+  .filters { display: flex; gap: 0.6rem; margin-bottom: 1rem; }
+  .filters input { flex: 1; }
+  ul.bookmarks { list-style: none; margin: 0; padding: 0; }
+  li.bookmark {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.8rem 1rem;
+    margin-bottom: 0.6rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+  .bookmark-main { min-width: 0; }
+  .bookmark-title { font-weight: 600; word-break: break-word; }
+  .bookmark-title.pending { color: var(--muted); font-style: italic; font-weight: 400; }
+  .bookmark-url { font-size: 0.8rem; color: var(--muted); word-break: break-all; }
+  .tags { margin-top: 0.35rem; display: flex; gap: 0.3rem; flex-wrap: wrap; }
+  .tag {
+    font-size: 0.72rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0.1rem 0.55rem;
+    color: var(--muted);
+  }
+  .empty { color: var(--muted); font-size: 0.9rem; padding: 1rem 0; text-align: center; }
+  .status { font-size: 0.8rem; color: var(--muted); margin-top: 0.5rem; min-height: 1.1em; }
+  .status.error { color: var(--danger); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>readshelf</h1>
+
+  <div class="panel">
+    <label for="apiKey">API key</label>
+    <input type="password" id="apiKey" placeholder="X-API-Key">
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <div>
+        <label for="url">URL</label>
+        <input type="text" id="url" placeholder="https://example.com">
+      </div>
+      <div>
+        <label for="tags">Tags (comma separated)</label>
+        <input type="text" id="tags" placeholder="reading, tech">
+      </div>
+    </div>
+    <button class="primary" id="saveBtn">Save bookmark</button>
+    <div class="status" id="saveStatus"></div>
+  </div>
+
+  <div class="filters">
+    <input type="text" id="search" placeholder="Search title or URL...">
+    <input type="text" id="tagFilter" placeholder="Filter by tag...">
+  </div>
+
+  <ul class="bookmarks" id="list"></ul>
+  <div class="empty" id="emptyMsg" style="display:none">No bookmarks yet.</div>
+</div>
+
+<script>
+const apiKeyInput = document.getElementById('apiKey');
+const savedKey = localStorage.getItem('readshelf_api_key');
+if (savedKey) apiKeyInput.value = savedKey;
+apiKeyInput.addEventListener('change', () => {
+  localStorage.setItem('readshelf_api_key', apiKeyInput.value);
+});
+
+function headers() {
+  return { 'Content-Type': 'application/json', 'X-API-Key': apiKeyInput.value };
+}
+
+async function api(path, options = {}) {
+  const res = await fetch(path, { ...options, headers: { ...headers(), ...(options.headers || {}) } });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`${res.status} ${res.statusText}${body ? ' — ' + body : ''}`);
+  }
+  return res.status === 204 ? null : res.json();
+}
+
+function setStatus(el, msg, isError) {
+  el.textContent = msg;
+  el.classList.toggle('error', !!isError);
+}
+
+async function loadBookmarks() {
+  const params = new URLSearchParams();
+  const q = document.getElementById('search').value.trim();
+  const tag = document.getElementById('tagFilter').value.trim();
+  if (q) params.set('q', q);
+  if (tag) params.set('tag', tag);
+
+  const list = document.getElementById('list');
+  const emptyMsg = document.getElementById('emptyMsg');
+  try {
+    const bookmarks = await api('/bookmarks?' + params.toString());
+    list.innerHTML = '';
+    emptyMsg.style.display = bookmarks.length ? 'none' : 'block';
+    for (const b of bookmarks) {
+      list.appendChild(renderBookmark(b));
+    }
+  } catch (err) {
+    list.innerHTML = '';
+    emptyMsg.style.display = 'block';
+    emptyMsg.textContent = 'Could not load bookmarks: ' + err.message;
+  }
+}
+
+function renderBookmark(b) {
+  const li = document.createElement('li');
+  li.className = 'bookmark';
+
+  const main = document.createElement('div');
+  main.className = 'bookmark-main';
+
+  const title = document.createElement('div');
+  title.className = 'bookmark-title' + (b.title ? '' : ' pending');
+  title.textContent = b.title || 'Fetching title…';
+  main.appendChild(title);
+
+  const url = document.createElement('div');
+  url.className = 'bookmark-url';
+  url.textContent = b.url;
+  main.appendChild(url);
+
+  if (b.tags.length) {
+    const tagsEl = document.createElement('div');
+    tagsEl.className = 'tags';
+    for (const t of b.tags) {
+      const tag = document.createElement('span');
+      tag.className = 'tag';
+      tag.textContent = t;
+      tagsEl.appendChild(tag);
+    }
+    main.appendChild(tagsEl);
+  }
+
+  const del = document.createElement('button');
+  del.className = 'danger';
+  del.textContent = 'Delete';
+  del.addEventListener('click', async () => {
+    del.disabled = true;
+    try {
+      await api(`/bookmarks/${b.id}`, { method: 'DELETE' });
+      loadBookmarks();
+    } catch (err) {
+      alert('Delete failed: ' + err.message);
+      del.disabled = false;
+    }
+  });
+
+  li.appendChild(main);
+  li.appendChild(del);
+  return li;
+}
+
+document.getElementById('saveBtn').addEventListener('click', async () => {
+  const urlInput = document.getElementById('url');
+  const tagsInput = document.getElementById('tags');
+  const statusEl = document.getElementById('saveStatus');
+  const url = urlInput.value.trim();
+  if (!url) {
+    setStatus(statusEl, 'Enter a URL first.', true);
+    return;
+  }
+  const tags = tagsInput.value.split(',').map(t => t.trim()).filter(Boolean);
+
+  setStatus(statusEl, 'Saving…', false);
+  try {
+    await api('/bookmarks', { method: 'POST', body: JSON.stringify({ url, tags }) });
+    urlInput.value = '';
+    tagsInput.value = '';
+    setStatus(statusEl, 'Saved.', false);
+    await loadBookmarks();
+    setTimeout(loadBookmarks, 2000);
+  } catch (err) {
+    setStatus(statusEl, 'Failed: ' + err.message, true);
+  }
+});
+
+document.getElementById('search').addEventListener('input', debounce(loadBookmarks, 300));
+document.getElementById('tagFilter').addEventListener('input', debounce(loadBookmarks, 300));
+
+function debounce(fn, ms) {
+  let t;
+  return (...args) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), ms);
+  };
+}
+
+loadBookmarks();
+</script>
+</body>
+</html>
